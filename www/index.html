@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<title>EQ Scope</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <header>
+    <h1>EQ Scope</h1>
+    <p id="status" class="status">Tap Start, then play music or use pink noise.</p>
+  </header>
+
+  <section class="card">
+    <div class="row">
+      <button id="btnMic" class="primary">Start listening</button>
+      <button id="btnHold">Hold</button>
+      <button id="btnReset">Reset avg</button>
+    </div>
+    <div class="row">
+      <button id="btnPink">Pink noise: off</button>
+      <label class="grow">Noise volume
+        <input id="noiseVol" type="range" min="0" max="100" value="30">
+      </label>
+    </div>
+    <div class="meter"><div id="meterFill"></div></div>
+    <div class="small" id="meterText">Input level: –</div>
+  </section>
+
+  <section class="card">
+    <h2>Bands</h2>
+    <label>Number of bands: <b id="countLabel">10</b>
+      <input id="bandCount" type="range" min="3" max="24" value="10">
+    </label>
+    <label>Frequencies in Hz (comma separated)
+      <div class="row">
+        <input id="freqText" type="text" inputmode="decimal" class="grow" autocomplete="off">
+        <button id="btnApplyFreqs">Apply</button>
+      </div>
+    </label>
+    <div class="row">
+      <label class="grow">Target curve
+        <select id="target">
+          <option value="flat">Flat</option>
+          <option value="warm">Warm (gentle tilt)</option>
+          <option value="bass">Bass lift (Harman-like)</option>
+        </select>
+      </label>
+      <label class="grow">Averaging
+        <select id="tau">
+          <option value="1">1 s</option>
+          <option value="3">3 s</option>
+          <option value="8" selected>8 s</option>
+          <option value="20">20 s</option>
+        </select>
+      </label>
+    </div>
+    <div class="row">
+      <label class="grow">EQ range
+        <select id="range">
+          <option value="6">±6 dB</option>
+          <option value="9">±9 dB</option>
+          <option value="12" selected>±12 dB</option>
+          <option value="15">±15 dB</option>
+        </select>
+      </label>
+      <label class="grow">Step
+        <select id="step">
+          <option value="0.1">0.1 dB</option>
+          <option value="0.5">0.5 dB</option>
+          <option value="1" selected>1 dB</option>
+          <option value="2">2 dB</option>
+        </select>
+      </label>
+    </div>
+    <label class="check"><input id="preferCuts" type="checkbox"> Prefer cuts (lower everything so nothing is boosted)</label>
+  </section>
+
+  <section class="card">
+    <h2>Set your EQ to</h2>
+    <canvas id="chart"></canvas>
+    <div class="legend"><span class="dot bars"></span>EQ to apply <span class="dot line"></span>Measured vs. target</div>
+    <div class="small" id="preamp"></div>
+    <table id="table">
+      <thead><tr><th>Hz</th><th>Measured</th><th>Target</th><th>Set EQ</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+</main>
+<script src="dsp.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
