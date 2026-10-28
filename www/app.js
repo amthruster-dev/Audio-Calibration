@@ -212,7 +212,50 @@
   function fmtDb(v) { const s = (Math.round(v * 10) / 10).toFixed(1); return (v > 0 ? '+' : '') + s; }
   function fmtGain(v) { const dec = state.settings.step < 1 ? 1 : 0; const s = v.toFixed(dec); return (v > 0 ? '+' : '') + s; }
 
+  function renderRecs() {
+    const eq = currentEq();
+    const ul = $('recs');
+    ul.innerHTML = '';
+    if (!eq) { $('summary').textContent = 'Start listening to get recommendations.'; return; }
+
+    const avg = (pred) => {
+      const v = [];
+      state.freqs.forEach((f, i) => { if (pred(f)) v.push(eq.gain[i]); });
+      return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+    };
+    const describe = (name, g, lowWord, highWord) => {
+      if (g === null || Math.abs(g) < 1.5) return null;
+      return g > 0 ? name + ' is ' + lowWord : name + ' is ' + highWord;
+    };
+    const parts = [
+      describe('Bass', avg(f => f < 250), 'weak', 'too strong'),
+      describe('Mids', avg(f => f >= 250 && f < 4000), 'recessed', 'too forward'),
+      describe('Treble', avg(f => f >= 4000), 'dull', 'too bright')
+    ].filter(Boolean);
+    $('summary').textContent = parts.length
+      ? parts.join('. ') + '.'
+      : 'Overall balance is close to your target.';
+
+    const items = state.freqs.map((f, i) => ({ f, g: eq.gain[i] }))
+      .filter(x => x.g !== 0)
+      .sort((a, b) => Math.abs(b.g) - Math.abs(a.g));
+    if (!items.length) {
+      const li = document.createElement('li');
+      li.textContent = 'No changes needed.';
+      ul.appendChild(li);
+      return;
+    }
+    items.forEach(x => {
+      const li = document.createElement('li');
+      const amt = Math.abs(x.g).toFixed(state.settings.step < 1 ? 1 : 0);
+      li.innerHTML = (x.g > 0 ? '<span class="up">Raise</span> ' : '<span class="down">Lower</span> ') +
+        fmtHz(x.f) + ' Hz by ' + amt + ' dB';
+      ul.appendChild(li);
+    });
+  }
+
   function render() {
+    renderRecs();
     renderTable();
     drawChart();
   }
