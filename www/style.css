@@ -43,6 +43,12 @@ table { width: 100%; border-collapse: collapse; margin-top: 10px; font-variant-n
 th, td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--line); }
 th:first-child, td:first-child { text-align: left; }
 th { color: var(--muted); font-weight: 500; font-size: 13px; }
+.dot.cutdot { background: var(--cut); }
+.warnText { color: var(--cut); }
+.steps { padding-left: 20px; margin: 0 0 10px; }
+#sliderChart { height: 200px; margin-top: 8px; }
+#sliderResults { padding-left: 20px; margin: 8px 0; }
+#btnUseSliders { width: 100%; margin-top: 4px; }
 .summary { margin: 0 0 8px; font-size: 16px; }
 #recs { margin: 0; padding-left: 20px; }
 #recs li { margin: 4px 0; }

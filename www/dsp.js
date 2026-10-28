@@ -144,7 +144,45 @@
     return { measured, target, gain, preamp, refDb };
   }
 
-  const api = { MIN_BANDS, MAX_BANDS, TARGETS, clamp, defaultFreqs, parseFreqs, bandEdges, bandPowers, toDb, targetAt, computeEq };
+  // ----- Slider test helpers (find which frequencies an EQ slider moves) -----
+  // Fine 1/6-octave bands, 30 Hz - 16 kHz.
+  function fineFreqs() {
+    const out = [];
+    for (let f = 30; f <= 16000; f *= Math.pow(2, 1 / 6)) out.push(f);
+    return out;
+  }
+
+  // diff: dB difference per fine band (slider capture minus baseline).
+  // Removes level drift (20th percentile = unaffected region), then finds the
+  // region that moved by at least half of the maximum change.
+  function analyzeDiff(freqs, diff) {
+    const n = diff.length;
+    const sorted = diff.slice().sort((a, b) => a - b);
+    const off = sorted[Math.floor(0.2 * (n - 1))];
+    const d = diff.map(v => v - off);
+    const sm = d.map((v, i) => (d[Math.max(0, i - 1)] + v + d[Math.min(n - 1, i + 1)]) / 3);
+    let M = -Infinity, p = 0;
+    sm.forEach((v, i) => { if (v > M) { M = v; p = i; } });
+    if (M < 1.5) return { ok: false, peakDb: M, curve: sm };
+    const half = M / 2;
+    let l = p; while (l > 0 && sm[l - 1] >= half) l--;
+    let h = p; while (h < n - 1 && sm[h + 1] >= half) h++;
+    const cross = (i, j) => {
+      const a = sm[i], b = sm[j];
+      const t = (a - half) / (a - b);
+      return Math.exp(Math.log(freqs[i]) + (Math.log(freqs[j]) - Math.log(freqs[i])) * t);
+    };
+    const lowEdge = l === 0 ? null : cross(l, l - 1);
+    const highEdge = h === n - 1 ? null : cross(h, h + 1);
+    let shape, rep;
+    if (lowEdge === null && highEdge === null) { shape = 'broad'; rep = Math.sqrt(freqs[0] * freqs[n - 1]); }
+    else if (lowEdge === null) { shape = 'low-shelf'; rep = Math.sqrt(freqs[0] * highEdge); }
+    else if (highEdge === null) { shape = 'high-shelf'; rep = Math.sqrt(lowEdge * freqs[n - 1]); }
+    else { shape = 'band'; rep = Math.sqrt(lowEdge * highEdge); }
+    return { ok: true, peakDb: M, peakHz: freqs[p], lowEdge, highEdge, shape, rep, curve: sm };
+  }
+
+  const api = { MIN_BANDS, MAX_BANDS, TARGETS, clamp, defaultFreqs, parseFreqs, bandEdges, bandPowers, toDb, targetAt, computeEq, fineFreqs, analyzeDiff };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.EQDSP = api;
 })(typeof self !== 'undefined' ? self : this);

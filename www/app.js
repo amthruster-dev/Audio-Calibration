@@ -173,8 +173,9 @@
     state.rmsDb = sum > 0 ? 10 * Math.log10(sum / timeBuf.length) : -120;
     updateMeter();
 
+    if (!state.hold || state.cap) state.analyser.getFloatFrequencyData(specBuf);
+    if (state.cap) stepCapture();
     if (!state.hold) {
-      state.analyser.getFloatFrequencyData(specBuf);
       const edges = D.bandEdges(state.freqs, state.ctx.sampleRate / 2);
       const p = D.bandPowers(specBuf, state.ctx.sampleRate, edges);
       if (!state.avgPower || state.avgPower.length !== p.length) {
@@ -334,6 +335,123 @@
     g.stroke();
   }
 
+  // ---------- slider test: find which frequencies an EQ slider moves ----------
+  const CAP_SECONDS = 6;
+  const fine = D.fineFreqs();
+  const fineEdges = (function () {
+    const e = [];
+    for (let i = 0; i < fine.length; i++) {
+      const lo = i === 0 ? fine[0] / Math.pow(2, 1 / 12) : Math.sqrt(fine[i - 1] * fine[i]);
+      const hi = i === fine.length - 1 ? fine[i] * Math.pow(2, 1 / 12) : Math.sqrt(fine[i] * fine[i + 1]);
+      e.push([lo, hi]);
+    }
+    return e;
+  })();
+  const sliderData = { base: null, bass: null, mid: null, treble: null };
+  const sliderNames = { bass: 'Bass', mid: 'Midrange', treble: 'Treble' };
+  const sliderColors = { bass: '--accent', mid: '--measured', treble: '--cut' };
+  let sliderResult = {};
+
+  function setSliderMsg(t, warn) {
+    const el = $('sliderMsg');
+    el.textContent = t;
+    el.className = 'small' + (warn ? ' warnText' : '');
+  }
+
+  function beginCapture(name) {
+    if (!state.listening) { setSliderMsg('Tap "Start listening" and turn Pink noise on first.', true); return; }
+    if (!state.pink) { setSliderMsg('Turn Pink noise on first.', true); return; }
+    if (name !== 'base' && !sliderData.base) { setSliderMsg('Capture the baseline first (all Alexa sliders at 0).', true); return; }
+    state.cap = { name: name, t0: performance.now(), sum: new Float64Array(fine.length), n: 0 };
+    setSliderMsg('Capturing ' + (name === 'base' ? 'baseline' : sliderNames[name]) + '… keep quiet and still.');
+  }
+
+  function stepCapture() {
+    const c = state.cap;
+    const p = D.bandPowers(specBuf, state.ctx.sampleRate, fineEdges);
+    for (let i = 0; i < p.length; i++) c.sum[i] += p[i];
+    c.n++;
+    const left = CAP_SECONDS - (performance.now() - c.t0) / 1000;
+    if (left > 0) { setSliderMsg('Capturing… ' + Math.ceil(left) + ' s'); return; }
+    const db = Array.from(c.sum, v => D.toDb(v / c.n));
+    sliderData[c.name] = db;
+    state.cap = null;
+    if (c.name === 'base') {
+      sliderResult = {};
+      sliderData.bass = sliderData.mid = sliderData.treble = null;
+      setSliderMsg('Baseline saved. Now set Alexa Bass to +6 (others at 0), then tap "Bass at +6".');
+    } else {
+      const diff = db.map((v, i) => v - sliderData.base[i]);
+      sliderResult[c.name] = D.analyzeDiff(fine, diff);
+      setSliderMsg(sliderResult[c.name].ok
+        ? sliderNames[c.name] + ' captured. Reset it to 0 before testing the next slider.'
+        : 'No change detected. Check the slider was really at +6 and the volume was unchanged.', !sliderResult[c.name].ok);
+    }
+    renderSlider();
+  }
+
+  function fmtHzFull(f) { return f >= 1000 ? (f / 1000).toFixed(1) + ' kHz' : Math.round(f) + ' Hz'; }
+
+  function describeSlider(r) {
+    if (!r.ok) return 'no change detected';
+    const g = '+' + r.peakDb.toFixed(1) + ' dB';
+    if (r.shape === 'low-shelf') return 'boosts everything below about ' + fmtHzFull(r.highEdge) + ' (' + g + ')';
+    if (r.shape === 'high-shelf') return 'boosts everything above about ' + fmtHzFull(r.lowEdge) + ' (' + g + ')';
+    if (r.shape === 'band') return 'boosts about ' + fmtHzFull(r.lowEdge) + ' to ' + fmtHzFull(r.highEdge) + ', strongest near ' + fmtHzFull(r.peakHz) + ' (' + g + ')';
+    return 'boosts the whole range (' + g + ')';
+  }
+
+  function renderSlider() {
+    const ul = $('sliderResults');
+    ul.innerHTML = '';
+    ['bass', 'mid', 'treble'].forEach(k => {
+      if (!sliderResult[k]) return;
+      const li = document.createElement('li');
+      li.textContent = sliderNames[k] + ': ' + describeSlider(sliderResult[k]);
+      ul.appendChild(li);
+    });
+    $('btnUseSliders').style.display = ['bass', 'mid', 'treble'].every(k => sliderResult[k] && sliderResult[k].ok) ? '' : 'none';
+    drawSliderChart();
+  }
+
+  function drawSliderChart() {
+    const cv = $('sliderChart');
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const keys = ['bass', 'mid', 'treble'].filter(k => sliderResult[k]);
+    let top = 8;
+    keys.forEach(k => sliderResult[k].curve.forEach(v => { if (v > top) top = Math.ceil(v + 1); }));
+    const padL = 30, padR = 6, padT = 8, padB = 22;
+    const pw = w - padL - padR, ph = h - padT - padB;
+    const lf0 = Math.log(30), lf1 = Math.log(16000);
+    const xOf = (f) => padL + (Math.log(f) - lf0) / (lf1 - lf0) * pw;
+    const yOf = (v) => padT + ph - ((D.clamp(v, -2, top) + 2) / (top + 2)) * ph;
+    g.font = '11px system-ui, sans-serif';
+    g.strokeStyle = css('--line'); g.fillStyle = css('--muted'); g.lineWidth = 1;
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    for (let v = 0; v <= top; v += 2) {
+      const y = yOf(v);
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y); g.stroke();
+      g.fillText(String(v), padL - 4, y);
+    }
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    [50, 100, 500, 1000, 5000, 10000].forEach(f => g.fillText(fmtHz(f), xOf(f), h - padB + 6));
+    keys.forEach(k => {
+      g.strokeStyle = css(sliderColors[k]); g.lineWidth = 2; g.beginPath();
+      sliderResult[k].curve.forEach((v, i) => {
+        const x = xOf(fine[i]), y = yOf(v);
+        if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+      });
+      g.stroke();
+    });
+  }
+
   // ---------- events ----------
   function applyCount(n) {
     state.freqs = D.defaultFreqs(n);
@@ -366,7 +484,18 @@
   $('range').addEventListener('change', (e) => { state.settings.range = +e.target.value; save(); render(); });
   $('step').addEventListener('change', (e) => { state.settings.step = +e.target.value; save(); render(); });
   $('preferCuts').addEventListener('change', (e) => { state.settings.preferCuts = e.target.checked; save(); render(); });
-  window.addEventListener('resize', drawChart);
+  window.addEventListener('resize', () => { drawChart(); drawSliderChart(); });
+  $('btnBase').addEventListener('click', () => beginCapture('base'));
+  $('btnBass').addEventListener('click', () => beginCapture('bass'));
+  $('btnMid').addEventListener('click', () => beginCapture('mid'));
+  $('btnTreble').addEventListener('click', () => beginCapture('treble'));
+  $('btnUseSliders').addEventListener('click', () => {
+    const f = ['bass', 'mid', 'treble'].map(k => Math.round(sliderResult[k].rep));
+    state.freqs = f.sort((a, b) => a - b);
+    state.settings.range = 6; state.settings.step = 1;
+    resetAverage(); syncControls(); save(); render();
+    setSliderMsg('Bands set to ' + state.freqs.join(', ') + ' Hz with ±6 dB range.');
+  });
 
   load();
   syncControls();
