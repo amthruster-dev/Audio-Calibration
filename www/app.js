@@ -12,7 +12,7 @@
     avgPower: null,      // linear power per octave, per band (EMA)
     lastT: 0,
     peakDb: -120, rmsDb: -120,
-    settings: { target: 'flat', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
+    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
   };
 
   // ---------- persistence ----------
