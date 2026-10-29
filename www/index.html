@@ -26,8 +26,31 @@
         <input id="noiseVol" type="range" min="0" max="100" value="30">
       </label>
     </div>
-    <div class="meter"><div id="meterFill"></div></div>
-    <div class="small" id="meterText">Input level: –</div>
+  </section>
+
+  <section class="card">
+    <h2>Mic check</h2>
+    <canvas id="meterCanvas"></canvas>
+    <div id="meterVerdict" class="verdict">Start listening to check the mic level.</div>
+    <div class="readouts">
+      <div><span class="k">Level</span><b id="rdRms">–</b></div>
+      <div><span class="k">Peak</span><b id="rdPeak">–</b></div>
+      <div><span class="k">Est. SPL</span><b id="rdSpl">not calibrated</b></div>
+    </div>
+    <div id="snrLine" class="small"></div>
+    <h3>Calibrate the mic</h3>
+    <p class="small">Play a steady sound, hold a sound level meter next to the phone, enter its dB reading, and tap Calibrate. Green zone = good level.</p>
+    <div class="row">
+      <label class="grow">Reference level (dB SPL)
+        <input id="refSpl" type="number" inputmode="decimal" placeholder="e.g. 75">
+      </label>
+      <button id="btnCal">Calibrate</button>
+    </div>
+    <div class="row">
+      <button id="btnNoise">Measure room noise</button>
+      <button id="btnClearCal">Clear calibration</button>
+    </div>
+    <div class="small" id="calMsg">Room noise: turn pink noise off and keep the room quiet.</div>
   </section>
 
   <section class="card">

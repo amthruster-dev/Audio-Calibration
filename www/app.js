@@ -11,8 +11,9 @@
     freqs: D.defaultFreqs(10),
     avgPower: null,      // linear power per octave, per band (EMA)
     lastT: 0,
-    peakDb: -120, rmsDb: -120,
-    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
+    peakDb: -120, rmsDb: -120, rmsPow: null, peakHold: -120, rmsHist: [],
+    noiseFloor: null, noiseCap: null,
+    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30, micOffset: null }
   };
 
   // ---------- persistence ----------
@@ -97,6 +98,9 @@
     if (state.stream) state.stream.getTracks().forEach(t => t.stop());
     if (state.micSrc) state.micSrc.disconnect();
     state.stream = null; state.micSrc = null; state.analyser = null;
+    state.rmsPow = null; state.rmsDb = -120; state.peakDb = -120; state.peakHold = -120;
+    state.rmsHist = []; state.noiseCap = null; state.cap = null;
+    updateMeter();
     $('btnMic').textContent = 'Start listening';
     $('btnMic').classList.add('primary');
     setStatus('Stopped.');
@@ -167,10 +171,24 @@
 
     // level meter (time domain)
     state.analyser.getFloatTimeDomainData(timeBuf);
+    const LW = 4096; // last ~85 ms for a responsive meter
     let peak = 0, sum = 0;
-    for (let i = 0; i < timeBuf.length; i++) { const v = Math.abs(timeBuf[i]); if (v > peak) peak = v; sum += v * v; }
+    for (let i = timeBuf.length - LW; i < timeBuf.length; i++) { const v = Math.abs(timeBuf[i]); if (v > peak) peak = v; sum += v * v; }
+    const inst = sum / LW;
     state.peakDb = peak > 0 ? 20 * Math.log10(peak) : -120;
-    state.rmsDb = sum > 0 ? 10 * Math.log10(sum / timeBuf.length) : -120;
+    state.rmsPow = state.rmsPow == null ? inst : state.rmsPow + 0.4 * (inst - state.rmsPow);
+    state.rmsDb = state.rmsPow > 1e-12 ? 10 * Math.log10(state.rmsPow) : -120;
+    state.peakHold = Math.max(state.peakDb, state.peakHold - 1);
+    state.rmsHist.push(inst); if (state.rmsHist.length > 20) state.rmsHist.shift();
+    if (state.noiseCap) {
+      state.noiseCap.sum += inst; state.noiseCap.n++;
+      const left = 3 - (now - state.noiseCap.t0) / 1000;
+      if (left <= 0) {
+        state.noiseFloor = toDbPow(state.noiseCap.sum / state.noiseCap.n);
+        state.noiseCap = null;
+        setCalMsg('Room noise: ' + state.noiseFloor.toFixed(0) + ' dBFS. Now turn pink noise on to see how far above it your signal is.');
+      } else setCalMsg('Measuring room noise… ' + Math.ceil(left) + ' s. Keep the speaker silent.');
+    }
     updateMeter();
 
     if (!state.hold || state.cap) state.analyser.getFloatFrequencyData(specBuf);
@@ -188,13 +206,94 @@
     render();
   }
 
+  // ---------- mic check / calibration ----------
+  function toDbPow(p) { return p > 1e-12 ? 10 * Math.log10(p) : -120; }
+  function setCalMsg(t) { $('calMsg').textContent = t; }
+
+  function levelVerdict(rms, peak) {
+    if (peak > -3) return { text: 'Too loud: the mic is at or near clipping. Lower the volume or move the phone back.', cls: 'bad' };
+    if (rms < -50) return { text: 'Too quiet. Raise the volume or move the phone closer.', cls: 'bad' };
+    if (rms < -35) return { text: 'A bit low. Raise the volume a little.', cls: 'warn' };
+    if (rms > -10) return { text: 'Too loud. Lower the volume.', cls: 'bad' };
+    if (rms > -20) return { text: 'A bit hot. Lower the volume a little.', cls: 'warn' };
+    return { text: 'Good level. The mic is receiving the right volume.', cls: 'ok' };
+  }
+
+  const METER_MIN = -80;
+  function drawMeter(active) {
+    const cv = $('meterCanvas');
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const xOf = (db) => D.clamp((db - METER_MIN) / -METER_MIN, 0, 1) * w;
+    const zones = [[-80, -50, '#ff6b5c'], [-50, -35, '#f2c14e'], [-35, -20, css('--accent')], [-20, -10, '#f2c14e'], [-10, 0, '#ff6b5c']];
+    const y0 = 6, bh = 26;
+    zones.forEach(z => {
+      const x0 = xOf(z[0]), x1 = xOf(z[1]);
+      g.globalAlpha = 0.28; g.fillStyle = z[2]; g.fillRect(x0, y0, x1 - x0, bh);
+      if (active) {
+        const lv = D.clamp(state.rmsDb, z[0], z[1]);
+        if (state.rmsDb > z[0]) { g.globalAlpha = 1; g.fillRect(x0, y0, xOf(lv) - x0, bh); }
+      }
+    });
+    g.globalAlpha = 1;
+    if (active && state.peakHold > METER_MIN) {
+      g.fillStyle = '#ffffff'; g.fillRect(Math.min(w - 2, xOf(state.peakHold)), y0 - 3, 2, bh + 6);
+    }
+    g.fillStyle = css('--muted'); g.font = '11px system-ui, sans-serif'; g.textBaseline = 'top';
+    [-80, -60, -40, -20, 0].forEach(v => {
+      g.textAlign = v === -80 ? 'left' : (v === 0 ? 'right' : 'center');
+      g.fillText(v + ' dBFS'.slice(0, v === 0 ? 5 : 0), xOf(v), y0 + bh + 6);
+    });
+  }
+
   function updateMeter() {
-    const pct = D.clamp((state.rmsDb + 80) / 80, 0, 1) * 100;
-    $('meterFill').style.width = pct.toFixed(0) + '%';
-    $('meterText').textContent = 'Input level: ' + state.rmsDb.toFixed(0) + ' dBFS (peak ' + state.peakDb.toFixed(0) + ')';
-    if (state.peakDb > -1) setStatus('Mic is clipping. Lower the speaker volume or move the phone back.', true);
-    else if (state.rmsDb < -70) setStatus('Signal too quiet. Raise the volume or move the phone closer.', true);
+    const active = state.listening;
+    drawMeter(active);
+    const v = $('meterVerdict');
+    if (!active) {
+      v.textContent = 'Start listening to check the mic level.'; v.className = 'verdict';
+      $('rdRms').textContent = '–'; $('rdPeak').textContent = '–';
+      $('rdSpl').textContent = state.settings.micOffset == null ? 'not calibrated' : '–';
+      $('snrLine').textContent = '';
+      return;
+    }
+    const r = levelVerdict(state.rmsDb, state.peakHold);
+    v.textContent = r.text; v.className = 'verdict ' + r.cls;
+    $('rdRms').textContent = state.rmsDb.toFixed(0) + ' dBFS';
+    $('rdPeak').textContent = state.peakHold.toFixed(0) + ' dBFS';
+    $('rdSpl').textContent = state.settings.micOffset == null ? 'not calibrated'
+      : (state.rmsDb + state.settings.micOffset).toFixed(0) + ' dB';
+    let snr = '';
+    if (state.noiseFloor != null) {
+      snr = 'Room noise: ' + state.noiseFloor.toFixed(0) + ' dBFS.';
+      if (state.pink) {
+        const d = state.rmsDb - state.noiseFloor;
+        snr += ' Signal is ' + d.toFixed(0) + ' dB above it: ' +
+          (d >= 20 ? 'good.' : (d >= 10 ? 'okay, a quieter room would help.' : 'too noisy for accurate results.'));
+      }
+    }
+    $('snrLine').textContent = snr;
+    if (r.cls === 'bad') setStatus(r.text, true);
     else if ($('status').className.indexOf('warn') >= 0) setStatus(state.hold ? 'Held.' : 'Listening…');
+  }
+
+  function calibrateMic() {
+    const ref = parseFloat($('refSpl').value);
+    if (!state.listening) { setCalMsg('Tap "Start listening" first.'); return; }
+    if (!(ref > 20 && ref < 140)) { setCalMsg('Enter the dB reading from your sound level meter (20 to 140).'); return; }
+    if (state.rmsHist.length < 10) { setCalMsg('Wait a second, then try again.'); return; }
+    const measured = toDbPow(state.rmsHist.reduce((a, b) => a + b, 0) / state.rmsHist.length);
+    if (measured < -70) { setCalMsg('Signal is too quiet to calibrate. Play steady sound first.'); return; }
+    state.settings.micOffset = ref - measured;
+    save();
+    setCalMsg('Calibrated. 0 dBFS now reads as ' + state.settings.micOffset.toFixed(0) + ' dB SPL.');
   }
 
   // ---------- rendering ----------
@@ -484,7 +583,16 @@
   $('range').addEventListener('change', (e) => { state.settings.range = +e.target.value; save(); render(); });
   $('step').addEventListener('change', (e) => { state.settings.step = +e.target.value; save(); render(); });
   $('preferCuts').addEventListener('change', (e) => { state.settings.preferCuts = e.target.checked; save(); render(); });
-  window.addEventListener('resize', () => { drawChart(); drawSliderChart(); });
+  window.addEventListener('resize', () => { drawChart(); drawSliderChart(); drawMeter(state.listening); });
+  $('btnCal').addEventListener('click', calibrateMic);
+  $('btnClearCal').addEventListener('click', () => {
+    state.settings.micOffset = null; save(); setCalMsg('Calibration cleared.'); updateMeter();
+  });
+  $('btnNoise').addEventListener('click', () => {
+    if (!state.listening) { setCalMsg('Tap "Start listening" first.'); return; }
+    if (state.pink) { setCalMsg('Turn Pink noise off and silence the speaker first.'); return; }
+    state.noiseCap = { t0: performance.now(), sum: 0, n: 0 };
+  });
   $('btnBase').addEventListener('click', () => beginCapture('base'));
   $('btnBass').addEventListener('click', () => beginCapture('bass'));
   $('btnMid').addEventListener('click', () => beginCapture('mid'));
@@ -500,4 +608,6 @@
   load();
   syncControls();
   render();
+  updateMeter();
+  if (state.settings.micOffset != null) setCalMsg('Calibrated. 0 dBFS reads as ' + state.settings.micOffset.toFixed(0) + ' dB SPL.');
 })();
