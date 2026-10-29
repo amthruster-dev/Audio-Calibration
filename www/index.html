@@ -121,27 +121,6 @@
       <tbody></tbody>
     </table>
   </section>
-
-  <section class="card">
-    <h2>Find Alexa slider frequencies</h2>
-    <ol class="small steps">
-      <li>Start listening and turn Pink noise on. Keep the volume and phone position the same for every step.</li>
-      <li>Alexa EQ: Bass, Midrange, Treble all at 0. Tap <b>Baseline</b>.</li>
-      <li>Set only Bass to +6. Tap <b>Bass at +6</b>. Put it back to 0.</li>
-      <li>Do the same for Midrange, then Treble.</li>
-    </ol>
-    <div class="row">
-      <button id="btnBase">Baseline</button>
-      <button id="btnBass">Bass at +6</button>
-      <button id="btnMid">Mid at +6</button>
-      <button id="btnTreble">Treble at +6</button>
-    </div>
-    <div id="sliderMsg" class="small">Not started.</div>
-    <canvas id="sliderChart"></canvas>
-    <div class="legend"><span class="dot bars"></span>Bass <span class="dot line"></span>Mid <span class="dot cutdot"></span>Treble (dB change vs. baseline)</div>
-    <ul id="sliderResults"></ul>
-    <button id="btnUseSliders" style="display:none">Use these as my 3 bands</button>
-  </section>
 </main>
 <script src="dsp.js"></script>
 <script src="app.js"></script>
