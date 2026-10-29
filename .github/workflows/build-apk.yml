@@ -24,13 +24,13 @@ jobs:
         working-directory: android
         run: chmod +x gradlew && ./gradlew assembleDebug --no-daemon
       - name: Rename APK
-        run: cp android/app/build/outputs/apk/debug/app-debug.apk eq-scope.apk
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk audio-calibration.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: eq-scope-apk
-          path: eq-scope.apk
+          name: audio-calibration.apk
+          path: audio-calibration.apk
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: build-${{ github.run_number }}
-          name: EQ Scope build ${{ github.run_number }}
-          files: eq-scope.apk
+          name: Audio Calibration build ${{ github.run_number }}
+          files: audio-calibration.apk

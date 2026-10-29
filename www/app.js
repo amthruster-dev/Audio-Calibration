@@ -73,7 +73,7 @@
         }
       });
     } catch (e) {
-      setStatus('Microphone blocked. Allow microphone access for EQ Scope in Android settings.', true);
+      setStatus('Microphone blocked. Allow microphone access for Audio Calibration in Android settings.', true);
       return;
     }
     state.analyser = ctx.createAnalyser();

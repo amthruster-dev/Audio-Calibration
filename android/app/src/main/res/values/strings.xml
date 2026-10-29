@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">EQ Scope</string>
-    <string name="title_activity_main">EQ Scope</string>
+    <string name="app_name">Audio Calibration</string>
+    <string name="title_activity_main">Audio Calibration</string>
     <string name="package_name">com.amthrusterdev.eqscope</string>
     <string name="custom_url_scheme">com.amthrusterdev.eqscope</string>
 </resources>
