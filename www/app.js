@@ -12,8 +12,8 @@
     avgPower: null,      // linear power per octave, per band (EMA)
     lastT: 0,
     peakDb: -120, rmsDb: -120, rmsPow: null, peakHold: -120, rmsHist: [],
-    noiseFloor: null, noiseCap: null,
-    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30, micOffset: null }
+    sweep: null, useSweep: true, sweepBusy: false,
+    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
   };
 
   // ---------- persistence ----------
@@ -99,7 +99,7 @@
     if (state.micSrc) state.micSrc.disconnect();
     state.stream = null; state.micSrc = null; state.analyser = null;
     state.rmsPow = null; state.rmsDb = -120; state.peakDb = -120; state.peakHold = -120;
-    state.rmsHist = []; state.noiseCap = null;
+    state.rmsHist = [];
     updateMeter();
     $('btnMic').textContent = 'Start listening';
     $('btnMic').classList.add('primary');
@@ -180,15 +180,6 @@
     state.rmsDb = state.rmsPow > 1e-12 ? 10 * Math.log10(state.rmsPow) : -120;
     state.peakHold = Math.max(state.peakDb, state.peakHold - 1);
     state.rmsHist.push(inst); if (state.rmsHist.length > 20) state.rmsHist.shift();
-    if (state.noiseCap) {
-      state.noiseCap.sum += inst; state.noiseCap.n++;
-      const left = 3 - (now - state.noiseCap.t0) / 1000;
-      if (left <= 0) {
-        state.noiseFloor = toDbPow(state.noiseCap.sum / state.noiseCap.n);
-        state.noiseCap = null;
-        setCalMsg('Room noise: ' + state.noiseFloor.toFixed(0) + ' dBFS. Now turn pink noise on to see how far above it your signal is.');
-      } else setCalMsg('Measuring room noise… ' + Math.ceil(left) + ' s. Keep the speaker silent.');
-    }
     updateMeter();
 
     if (!state.hold) state.analyser.getFloatFrequencyData(specBuf);
@@ -256,50 +247,169 @@
     const active = state.listening;
     drawMeter(active);
     const v = $('meterVerdict');
+    $('rdNoise').textContent = state.sweep ? state.sweep.noiseDb.toFixed(0) + ' dBFS' : '–';
     if (!active) {
       v.textContent = 'Start listening to check the mic level.'; v.className = 'verdict';
       $('rdRms').textContent = '–'; $('rdPeak').textContent = '–';
-      $('rdSpl').textContent = state.settings.micOffset == null ? 'not calibrated' : '–';
-      $('snrLine').textContent = '';
       return;
     }
     const r = levelVerdict(state.rmsDb, state.peakHold);
     v.textContent = r.text; v.className = 'verdict ' + r.cls;
     $('rdRms').textContent = state.rmsDb.toFixed(0) + ' dBFS';
     $('rdPeak').textContent = state.peakHold.toFixed(0) + ' dBFS';
-    $('rdSpl').textContent = state.settings.micOffset == null ? 'not calibrated'
-      : (state.rmsDb + state.settings.micOffset).toFixed(0) + ' dB';
-    let snr = '';
-    if (state.noiseFloor != null) {
-      snr = 'Room noise: ' + state.noiseFloor.toFixed(0) + ' dBFS.';
-      if (state.pink) {
-        const d = state.rmsDb - state.noiseFloor;
-        snr += ' Signal is ' + d.toFixed(0) + ' dB above it: ' +
-          (d >= 20 ? 'good.' : (d >= 10 ? 'okay, a quieter room would help.' : 'too noisy for accurate results.'));
-      }
-    }
-    $('snrLine').textContent = snr;
     if (r.cls === 'bad') setStatus(r.text, true);
     else if ($('status').className.indexOf('warn') >= 0) setStatus(state.hold ? 'Held.' : 'Listening…');
   }
 
-  function calibrateMic() {
-    const ref = parseFloat($('refSpl').value);
+  // ---------- sweep calibration ----------
+  const SWEEP_T = 8, SWEEP_LEAD = 0.3, SWEEP_TAIL = 3.5;
+  const fine = D.fineFreqs();
+  const fineEdges = (function () {
+    const e = [];
+    for (let i = 0; i < fine.length; i++) {
+      const lo = i === 0 ? fine[0] / Math.pow(2, 1 / 12) : Math.sqrt(fine[i - 1] * fine[i]);
+      const hi = i === fine.length - 1 ? fine[i] * Math.pow(2, 1 / 12) : Math.sqrt(fine[i] * fine[i + 1]);
+      e.push([lo, hi]);
+    }
+    return e;
+  })();
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+  async function runSweep() {
+    if (state.sweepBusy) return;
     if (!state.listening) { setCalMsg('Tap "Start listening" first.'); return; }
-    if (!(ref > 20 && ref < 140)) { setCalMsg('Enter the dB reading from your sound level meter (20 to 140).'); return; }
-    if (state.rmsHist.length < 10) { setCalMsg('Wait a second, then try again.'); return; }
-    const measured = toDbPow(state.rmsHist.reduce((a, b) => a + b, 0) / state.rmsHist.length);
-    if (measured < -70) { setCalMsg('Signal is too quiet to calibrate. Play steady sound first.'); return; }
-    state.settings.micOffset = ref - measured;
-    save();
-    setCalMsg('Calibrated. 0 dBFS now reads as ' + state.settings.micOffset.toFixed(0) + ' dB SPL.');
+    if (typeof state.ctx.createScriptProcessor !== 'function') { setCalMsg('This device cannot record the sweep.'); return; }
+    state.sweepBusy = true;
+    $('btnSweep').disabled = true;
+    if (state.pink) stopPink();
+    const ctx = state.ctx, sr = ctx.sampleRate;
+    const ref = D.makeSweep(sr, SWEEP_T, 20, Math.min(20000, sr * 0.45));
+    const chunks = [];
+    const sp = ctx.createScriptProcessor(4096, 1, 1);
+    sp.onaudioprocess = (e) => { chunks.push(new Float32Array(e.inputBuffer.getChannelData(0))); };
+    state.micSrc.connect(sp);
+    sp.connect(ctx.destination); // outputs silence; keeps the processor running
+    try {
+      setCalMsg('Get ready. Keep the room quiet…');
+      await sleep(SWEEP_LEAD * 1000);
+      const buf = ctx.createBuffer(1, ref.length, sr);
+      buf.copyToChannel(ref, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const gain = ctx.createGain();
+      gain.gain.value = volToGain(state.settings.noiseVol) * 0.4;
+      src.connect(gain).connect(ctx.destination);
+      src.start();
+      const t0 = performance.now(), total = SWEEP_T + SWEEP_TAIL;
+      while ((performance.now() - t0) / 1000 < total) {
+        const left = Math.ceil(total - (performance.now() - t0) / 1000);
+        setCalMsg((performance.now() - t0) / 1000 < SWEEP_T ? 'Playing sweep… ' + left + ' s' : 'Recording the room… ' + left + ' s');
+        await sleep(250);
+      }
+      src.disconnect(); gain.disconnect();
+    } finally {
+      state.micSrc.disconnect(sp);
+      sp.disconnect();
+      sp.onaudioprocess = null;
+    }
+    let n = 0;
+    chunks.forEach(c => { n += c.length; });
+    const rec = new Float32Array(n);
+    let o = 0;
+    chunks.forEach(c => { rec.set(c, o); o += c.length; });
+    if (n < sr * 8) { setCalMsg('Recording failed. Try again.'); endSweep(); return; }
+
+    setCalMsg('Analyzing…');
+    await sleep(60);
+    const resp = D.sweepResponse(rec, ref, sr);
+    const nWin = Math.round(0.25 * sr);
+    let nsum = 0;
+    for (let i = 0; i < nWin; i++) nsum += rec[i] * rec[i];
+    const noiseDb = toDbPow(nsum / nWin);
+    const s0 = resp.peakIndex, s1 = Math.min(rec.length, s0 + ref.length);
+    let ssum = 0, speak = 0;
+    for (let i = s0; i < s1; i++) { const v = rec[i]; ssum += v * v; if (Math.abs(v) > speak) speak = Math.abs(v); }
+    const rmsDb = toDbPow(ssum / Math.max(1, s1 - s0));
+    const peakDb = speak > 0 ? 20 * Math.log10(speak) : -120;
+
+    const lv = D.responseBandLevels(resp, fineEdges);
+    let acc = 0, cnt = 0;
+    fine.forEach((f, i) => { if (f >= 500 && f <= 2000) { acc += lv[i]; cnt++; } });
+    const ref0 = cnt ? acc / cnt : 0;
+    state.sweep = { resp: resp, noiseDb: noiseDb, rmsDb: rmsDb, peakDb: peakDb, curve: lv.map(v => v - ref0) };
+    state.useSweep = true;
+    $('useSweep').checked = true;
+    $('useSweepRow').style.display = '';
+    $('sweepLegend').style.display = '';
+    $('sweepChart').classList.add('show');
+
+    const lvl = levelVerdict(rmsDb, peakDb);
+    const snr = rmsDb - noiseDb;
+    const snrTxt = snr >= 25 ? 'Sweep is ' + snr.toFixed(0) + ' dB above room noise: good.'
+      : (snr >= 15 ? 'Sweep is ' + snr.toFixed(0) + ' dB above room noise: okay, a quieter room or higher volume would help.'
+        : 'Sweep is only ' + snr.toFixed(0) + ' dB above room noise: too noisy. Raise the volume or quiet the room.');
+    setCalMsg('Done. Mic level during sweep: ' + lvl.text + ' ' + snrTxt);
+    endSweep();
+    updateMeter();
+    render();
+    drawSweepChart();
+  }
+
+  function endSweep() { state.sweepBusy = false; $('btnSweep').disabled = false; }
+
+  function drawSweepChart() {
+    const cv = $('sweepChart');
+    if (!state.sweep) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const R = 15;
+    const padL = 30, padR = 6, padT = 8, padB = 22;
+    const pw = w - padL - padR, ph = h - padT - padB;
+    const lf0 = Math.log(30), lf1 = Math.log(16000);
+    const xOf = (f) => padL + (Math.log(f) - lf0) / (lf1 - lf0) * pw;
+    const yOf = (v) => padT + ph / 2 - (D.clamp(v, -R, R) / R) * (ph / 2);
+    g.font = '11px system-ui, sans-serif';
+    g.strokeStyle = css('--line'); g.fillStyle = css('--muted'); g.lineWidth = 1;
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    [-15, -10, -5, 0, 5, 10, 15].forEach(v => {
+      const y = yOf(v);
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y); g.stroke();
+      g.fillText(String(v), padL - 4, y);
+    });
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    [50, 100, 500, 1000, 5000, 10000].forEach(f => {
+      g.textAlign = f === 10000 ? 'right' : 'center';
+      g.fillText(fmtHz(f), f === 10000 ? w - padR : xOf(f), h - padB + 6);
+    });
+    g.strokeStyle = css('--measured'); g.lineWidth = 2; g.beginPath();
+    state.sweep.curve.forEach((v, i) => {
+      const x = xOf(fine[i]), y = yOf(v);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    });
+    g.stroke();
   }
 
   // ---------- rendering ----------
+  function currentLevels() {
+    if (state.sweep && state.useSweep) {
+      const edges = D.bandEdges(state.freqs, state.sweep.resp.sr / 2);
+      return { levels: D.responseBandLevels(state.sweep.resp, edges), src: 'sweep' };
+    }
+    if (state.avgPower) return { levels: state.avgPower.map(D.toDb), src: 'live' };
+    return null;
+  }
+
   function currentEq() {
-    if (!state.avgPower) return null;
-    const levels = state.avgPower.map(D.toDb);
-    return D.computeEq(state.freqs, levels, {
+    const cur = currentLevels();
+    if (!cur) return null;
+    return D.computeEq(state.freqs, cur.levels, {
       target: state.settings.target,
       range: state.settings.range,
       step: state.settings.step,
@@ -315,7 +425,9 @@
     const eq = currentEq();
     const ul = $('recs');
     ul.innerHTML = '';
-    if (!eq) { $('summary').textContent = 'Start listening to get recommendations.'; return; }
+    const cur = currentLevels();
+    $('basedOn').textContent = cur ? 'Based on: ' + (cur.src === 'sweep' ? 'sweep measurement' : 'live pink noise / music') : '';
+    if (!eq) { $('summary').textContent = 'Run the sweep or start listening to get recommendations.'; return; }
 
     const avg = (pred) => {
       const v = [];
@@ -465,20 +577,12 @@
   $('range').addEventListener('change', (e) => { state.settings.range = +e.target.value; save(); render(); });
   $('step').addEventListener('change', (e) => { state.settings.step = +e.target.value; save(); render(); });
   $('preferCuts').addEventListener('change', (e) => { state.settings.preferCuts = e.target.checked; save(); render(); });
-  window.addEventListener('resize', () => { drawChart(); drawMeter(state.listening); });
-  $('btnCal').addEventListener('click', calibrateMic);
-  $('btnClearCal').addEventListener('click', () => {
-    state.settings.micOffset = null; save(); setCalMsg('Calibration cleared.'); updateMeter();
-  });
-  $('btnNoise').addEventListener('click', () => {
-    if (!state.listening) { setCalMsg('Tap "Start listening" first.'); return; }
-    if (state.pink) { setCalMsg('Turn Pink noise off and silence the speaker first.'); return; }
-    state.noiseCap = { t0: performance.now(), sum: 0, n: 0 };
-  });
+  window.addEventListener('resize', () => { drawChart(); drawMeter(state.listening); drawSweepChart(); });
+  $('btnSweep').addEventListener('click', () => { runSweep().catch(() => { setCalMsg('Sweep failed. Try again.'); endSweep(); }); });
+  $('useSweep').addEventListener('change', (e) => { state.useSweep = e.target.checked; render(); });
 
   load();
   syncControls();
   render();
   updateMeter();
-  if (state.settings.micOffset != null) setCalMsg('Calibrated. 0 dBFS reads as ' + state.settings.micOffset.toFixed(0) + ' dB SPL.');
 })();

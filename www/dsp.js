@@ -188,7 +188,117 @@
     return { ok: true, peakDb: M, peakHz: freqs[p], lowEdge, highEdge, shape, rep, curve: sm };
   }
 
-  const api = { MIN_BANDS, MAX_BANDS, TARGETS, clamp, defaultFreqs, parseFreqs, bandEdges, bandPowers, toDb, targetAt, computeEq, fineFreqs, analyzeDiff };
+  // ----- Sweep measurement (exponential sine sweep + deconvolution) -----
+  function nextPow2(n) { let p = 1; while (p < n) p <<= 1; return p; }
+
+  // In-place radix-2 complex FFT. inverse=true also divides by n.
+  function fft(re, im, inverse) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = 2 * Math.PI / len * (inverse ? 1 : -1);
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      const half = len >> 1;
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let j = 0; j < half; j++) {
+          const a = i + j, b = a + half;
+          const xr = re[b] * cr - im[b] * ci;
+          const xi = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - xr; im[b] = im[a] - xi;
+          re[a] += xr; im[a] += xi;
+          const t = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = t;
+        }
+      }
+    }
+    if (inverse) for (let i = 0; i < n; i++) { re[i] /= n; im[i] /= n; }
+  }
+
+  // Exponential (log) sine sweep from f1 to f2 over T seconds, 50 ms fades.
+  function makeSweep(sr, T, f1, f2) {
+    const n = Math.floor(sr * T);
+    const out = new Float32Array(n);
+    const L = Math.log(f2 / f1);
+    const K = 2 * Math.PI * f1 * T / L;
+    for (let i = 0; i < n; i++) out[i] = Math.sin(K * (Math.exp((i / sr) / T * L) - 1));
+    const fade = Math.floor(sr * 0.05);
+    for (let i = 0; i < fade; i++) {
+      const g = Math.pow(Math.sin(0.5 * Math.PI * i / fade), 2);
+      out[i] *= g; out[n - 1 - i] *= g;
+    }
+    return out;
+  }
+
+  // Deconvolve the recording by the played sweep to get the impulse response,
+  // gate it (1 ms before the main peak, 250 ms after) and return |H(f)|^2.
+  function sweepResponse(rec, ref, sr) {
+    const N = nextPow2(rec.length);
+    const rr = new Float64Array(N), ri = new Float64Array(N);
+    const sR = new Float64Array(N), sI = new Float64Array(N);
+    for (let i = 0; i < rec.length; i++) rr[i] = rec[i];
+    for (let i = 0; i < ref.length; i++) sR[i] = ref[i];
+    fft(rr, ri, false); fft(sR, sI, false);
+    let maxS = 0;
+    for (let k = 0; k < N; k++) { const p = sR[k] * sR[k] + sI[k] * sI[k]; if (p > maxS) maxS = p; }
+    const eps = maxS * 1e-6;
+    for (let k = 0; k < N; k++) {
+      const den = sR[k] * sR[k] + sI[k] * sI[k] + eps;
+      const hr = (rr[k] * sR[k] + ri[k] * sI[k]) / den;   // R * conj(S)
+      const hi = (ri[k] * sR[k] - rr[k] * sI[k]) / den;
+      rr[k] = hr; ri[k] = hi;
+    }
+    fft(rr, ri, true);
+    let p = 0, best = 0;
+    for (let i = 0; i < rec.length; i++) { const v = Math.abs(rr[i]); if (v > best) { best = v; p = i; } }
+    const pre = Math.round(0.001 * sr), post = Math.round(0.25 * sr);
+    const Lw = pre + post, M = nextPow2(Lw);
+    const wr = new Float64Array(M), wi = new Float64Array(M);
+    const flatEnd = pre + Math.round(post * 0.6);
+    for (let i = 0; i < Lw; i++) {
+      let w = 1;
+      if (i < pre) w = Math.pow(Math.sin(0.5 * Math.PI * i / pre), 2);
+      else if (i > flatEnd) w = Math.pow(Math.cos(0.5 * Math.PI * (i - flatEnd) / (Lw - flatEnd)), 2);
+      wr[i] = rr[(p - pre + i + N) % N] * w;
+    }
+    fft(wr, wi, false);
+    const half = M >> 1;
+    const freq = new Float64Array(half - 1), pow = new Float64Array(half - 1);
+    for (let k = 1; k < half; k++) {
+      freq[k - 1] = k * sr / M;
+      pow[k - 1] = wr[k] * wr[k] + wi[k] * wi[k];
+    }
+    return { freq, pow, peakIndex: p, delaySec: p / sr, sr };
+  }
+
+  // Band levels (dB) from a response, weighting bins by 1/f (even weight per octave).
+  function responseBandLevels(resp, edges) {
+    const f = resp.freq, P = resp.pow;
+    return edges.map(e => {
+      let s = 0, w = 0;
+      for (let k = 0; k < f.length; k++) {
+        if (f[k] < e[0]) continue;
+        if (f[k] > e[1]) break;
+        s += P[k] / f[k]; w += 1 / f[k];
+      }
+      if (w === 0) {
+        const mid = Math.sqrt(e[0] * e[1]);
+        let bk = 0;
+        for (let k = 1; k < f.length; k++) if (Math.abs(f[k] - mid) < Math.abs(f[bk] - mid)) bk = k;
+        return toDb(P[bk]);
+      }
+      return toDb(s / w);
+    });
+  }
+
+  const api = { MIN_BANDS, MAX_BANDS, TARGETS, clamp, defaultFreqs, parseFreqs, bandEdges, bandPowers, toDb, targetAt, computeEq, fineFreqs, analyzeDiff, nextPow2, fft, makeSweep, sweepResponse, responseBandLevels };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.EQDSP = api;
 })(typeof self !== 'undefined' ? self : this);

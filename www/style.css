@@ -53,6 +53,9 @@ th { color: var(--muted); font-weight: 500; font-size: 13px; }
 .readouts .k { display: block; color: var(--muted); font-size: 12px; }
 .readouts b { font-size: 15px; font-variant-numeric: tabular-nums; }
 h3 { margin: 14px 0 4px; font-size: 15px; }
+.wide { width: 100%; margin: 4px 0; }
+#sweepChart { height: 190px; margin-top: 8px; display: none; }
+#sweepChart.show { display: block; }
 input[type=number] { width: 100%; background: #0f1317; color: var(--text); border: 1px solid var(--line);
   border-radius: 10px; padding: 12px; font-size: 16px; margin-top: 6px; min-height: 46px; }
 .summary { margin: 0 0 8px; font-size: 16px; }

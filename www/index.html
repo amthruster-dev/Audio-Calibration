@@ -22,7 +22,7 @@
     </div>
     <div class="row">
       <button id="btnPink">Pink noise: off</button>
-      <label class="grow">Noise volume
+      <label class="grow">Test volume
         <input id="noiseVol" type="range" min="0" max="100" value="30">
       </label>
     </div>
@@ -35,22 +35,15 @@
     <div class="readouts">
       <div><span class="k">Level</span><b id="rdRms">–</b></div>
       <div><span class="k">Peak</span><b id="rdPeak">–</b></div>
-      <div><span class="k">Est. SPL</span><b id="rdSpl">not calibrated</b></div>
+      <div><span class="k">Room noise</span><b id="rdNoise">–</b></div>
     </div>
-    <div id="snrLine" class="small"></div>
-    <h3>Calibrate the mic</h3>
-    <p class="small">Play a steady sound, hold a sound level meter next to the phone, enter its dB reading, and tap Calibrate. Green zone = good level.</p>
-    <div class="row">
-      <label class="grow">Reference level (dB SPL)
-        <input id="refSpl" type="number" inputmode="decimal" placeholder="e.g. 75">
-      </label>
-      <button id="btnCal">Calibrate</button>
-    </div>
-    <div class="row">
-      <button id="btnNoise">Measure room noise</button>
-      <button id="btnClearCal">Clear calibration</button>
-    </div>
-    <div class="small" id="calMsg">Room noise: turn pink noise off and keep the room quiet.</div>
+    <h3>Sweep calibration</h3>
+    <p class="small">Plays a sweep from 20 Hz to 20 kHz through your speaker and records it with the mic to measure your room and listening spot. Sit where you listen, keep the room quiet, and set the volume so the meter is in the green.</p>
+    <button id="btnSweep" class="primary wide">Run sweep (about 12 s)</button>
+    <div class="small" id="calMsg">Tap Start listening, then run the sweep.</div>
+    <canvas id="sweepChart"></canvas>
+    <div class="legend" id="sweepLegend" style="display:none"><span class="dot line"></span>Room response (dB, 0 = 1 kHz)</div>
+    <label class="check" id="useSweepRow" style="display:none"><input id="useSweep" type="checkbox" checked> Use the sweep for the recommendations below</label>
   </section>
 
   <section class="card">
@@ -107,7 +100,8 @@
 
   <section class="card">
     <h2>What to change</h2>
-    <p id="summary" class="summary">Start listening to get recommendations.</p>
+    <p id="summary" class="summary">Run the sweep or start listening to get recommendations.</p>
+    <div id="basedOn" class="small"></div>
     <ul id="recs"></ul>
   </section>
 
