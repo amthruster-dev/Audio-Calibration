@@ -2,6 +2,8 @@
   "name": "eq-scope",
   "version": "1.0.0",
   "private": true,
+  "license": "UNLICENSED",
+  "author": "Angello Celeste Murillo",
   "description": "Mic-based real-time EQ analyzer: listens to a speaker and suggests EQ settings for 3-24 bands",
   "scripts": {
     "sync": "cap sync android"

@@ -66,3 +66,5 @@ input[type=number] { width: 100%; background: #0f1317; color: var(--text); borde
 td.eq { font-weight: 700; }
 td.boost { color: var(--accent); }
 td.cut { color: var(--cut); }
+
+.legal { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
