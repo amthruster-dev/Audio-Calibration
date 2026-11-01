@@ -70,3 +70,6 @@ td.cut { color: var(--cut); }
 .legal { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
 .disclaimer summary { cursor: pointer; font-weight: 600; }
 .disclaimer p { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
+.legal details { margin-top: 6px; text-align: left; }
+.legal summary { cursor: pointer; text-align: center; }
+.legal p { margin: 8px 0 0; line-height: 1.5; }
