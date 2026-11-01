@@ -68,3 +68,5 @@ td.boost { color: var(--accent); }
 td.cut { color: var(--cut); }
 
 .legal { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+.disclaimer summary { cursor: pointer; font-weight: 600; }
+.disclaimer p { color: var(--muted); font-size: 13px; margin: 8px 0 0; }
