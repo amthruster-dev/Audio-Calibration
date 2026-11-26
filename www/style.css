@@ -73,3 +73,8 @@ td.cut { color: var(--cut); }
 .legal details { margin-top: 6px; text-align: left; }
 .legal summary { cursor: pointer; text-align: center; }
 .legal p { margin: 8px 0 0; line-height: 1.5; }
+#specCanvas { height: 230px; }
+.dot.peakdot { background: #ffffff; }
+.dot.bandmark { background: transparent; border: 1px dashed var(--muted); }
+.warnText { color: var(--cut); }
+#countMsg:empty { display: none; }

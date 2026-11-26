@@ -13,6 +13,7 @@
     lastT: 0,
     peakDb: -120, rmsDb: -120, rmsPow: null, peakHold: -120, rmsHist: [],
     sweep: null, useSweep: true, sweepBusy: false,
+    spec: null, specPeak: null, specTop: null,
     settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
   };
 
@@ -40,7 +41,6 @@
 
   function syncControls() {
     $('bandCount').value = state.freqs.length;
-    $('countLabel').textContent = state.freqs.length;
     $('freqText').value = state.freqs.join(', ');
     $('target').value = state.settings.target;
     $('tau').value = String(state.settings.tau);
@@ -89,6 +89,7 @@
     resetAverage();
     $('btnMic').textContent = 'Stop listening';
     $('btnMic').classList.remove('primary');
+    $('specNote').textContent = 'Live spectrum (dB). Dotted lines are your EQ bands.';
     setStatus('Listening… keep the phone near where you sit, mic facing the speaker.');
     requestAnimationFrame(frame);
   }
@@ -100,6 +101,9 @@
     state.stream = null; state.micSrc = null; state.analyser = null;
     state.rmsPow = null; state.rmsDb = -120; state.peakDb = -120; state.peakHold = -120;
     state.rmsHist = [];
+    state.spec = null; state.specPeak = null; state.specTop = null;
+    $('specNote').textContent = 'Stopped. Start listening to see the spectrum.';
+    drawSpectrum();
     updateMeter();
     $('btnMic').textContent = 'Start listening';
     $('btnMic').classList.add('primary');
@@ -183,6 +187,7 @@
     updateMeter();
 
     if (!state.hold) state.analyser.getFloatFrequencyData(specBuf);
+    if (!state.hold) updateSpectrum(dt);
     if (!state.hold) {
       const edges = D.bandEdges(state.freqs, state.ctx.sampleRate / 2);
       const p = D.bandPowers(specBuf, state.ctx.sampleRate, edges);
@@ -194,6 +199,102 @@
       }
     }
     render();
+  }
+
+  // ---------- spectrum analyzer ----------
+  const specFreqs = [];
+  for (let f = 25; f <= 20000; f *= Math.pow(2, 1 / 12)) specFreqs.push(f);
+  let specEdges = null, specEdgesSr = 0, specN = 0;
+
+  function updateSpectrum(dt) {
+    const sr = state.ctx.sampleRate;
+    if (!specEdges || specEdgesSr !== sr) {
+      const maxF = Math.min(20000, sr / 2 * 0.95);
+      const fr = specFreqs.filter(f => f <= maxF);
+      specN = fr.length;
+      specEdges = fr.map(f => [f / Math.pow(2, 1 / 24), f * Math.pow(2, 1 / 24)]);
+      specEdgesSr = sr;
+      state.spec = null; state.specPeak = null;
+    }
+    const p = D.bandPowers(specBuf, sr, specEdges);
+    const db = p.map(D.toDb);
+    if (!state.spec) { state.spec = db.slice(); state.specPeak = db.slice(); }
+    const a = 1 - Math.exp(-dt / 0.25);
+    for (let i = 0; i < specN; i++) {
+      state.spec[i] += a * (db[i] - state.spec[i]);
+      state.specPeak[i] = Math.max(state.spec[i], state.specPeak[i] - 8 * dt);
+    }
+    let mx = -Infinity;
+    for (let i = 0; i < specN; i++) if (state.spec[i] > mx) mx = state.spec[i];
+    const top = Math.ceil((mx + 5) / 10) * 10;
+    state.specTop = state.specTop == null ? top : state.specTop + 0.15 * (top - state.specTop);
+    drawSpectrum();
+  }
+
+  function drawSpectrum() {
+    const cv = $('specCanvas');
+    const dpr = window.devicePixelRatio || 1;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    if (!w) return;
+    if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) {
+      cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    }
+    const g = cv.getContext('2d');
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+    const padL = 34, padR = 6, padT = 8, padB = 22;
+    const pw = w - padL - padR, ph = h - padT - padB;
+    const lf0 = Math.log(20), lf1 = Math.log(20000);
+    const xOf = (f) => padL + (Math.log(f) - lf0) / (lf1 - lf0) * pw;
+    const top = state.specTop == null ? -20 : state.specTop, span = 70, bot = top - span;
+    const yOf = (v) => padT + ph - (D.clamp(v, bot, top) - bot) / span * ph;
+
+    g.font = '11px system-ui, sans-serif';
+    g.strokeStyle = css('--line'); g.fillStyle = css('--muted'); g.lineWidth = 1;
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    for (let v = Math.ceil(bot / 10) * 10; v <= top; v += 10) {
+      const y = yOf(v);
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(w - padR, y); g.stroke();
+      g.fillText(String(Math.round(v)), padL - 4, y);
+    }
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    [[20, '20'], [50, '50'], [100, '100'], [200, '200'], [500, '500'], [1000, '1k'], [2000, '2k'], [5000, '5k'], [10000, '10k'], [20000, '']].forEach(t => {
+      const x = xOf(t[0]);
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.globalAlpha = 0.5; g.stroke(); g.globalAlpha = 1;
+      g.textAlign = t[0] === 20 ? 'left' : (t[0] === 20000 ? 'right' : 'center');
+      g.fillText(t[1], x, h - padB + 6);
+    });
+
+    // band markers
+    g.save();
+    g.setLineDash([3, 4]); g.strokeStyle = css('--muted'); g.globalAlpha = 0.8;
+    state.freqs.forEach(f => {
+      const x = xOf(f);
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + ph); g.stroke();
+    });
+    g.restore();
+
+    if (!state.spec) return;
+    const pts = [];
+    for (let i = 0; i < specN; i++) pts.push([xOf(specFreqs[i]), yOf(state.spec[i])]);
+    g.beginPath();
+    g.moveTo(pts[0][0], padT + ph);
+    pts.forEach(q => g.lineTo(q[0], q[1]));
+    g.lineTo(pts[pts.length - 1][0], padT + ph);
+    g.closePath();
+    const grad = g.createLinearGradient(0, padT, 0, padT + ph);
+    grad.addColorStop(0, 'rgba(61,220,151,0.55)'); grad.addColorStop(1, 'rgba(61,220,151,0.05)');
+    g.fillStyle = grad; g.fill();
+    g.beginPath();
+    pts.forEach((q, i) => { if (i === 0) g.moveTo(q[0], q[1]); else g.lineTo(q[0], q[1]); });
+    g.strokeStyle = css('--accent'); g.lineWidth = 2; g.stroke();
+
+    g.beginPath();
+    for (let i = 0; i < specN; i++) {
+      const x = xOf(specFreqs[i]), y = yOf(state.specPeak[i]);
+      if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.strokeStyle = 'rgba(255,255,255,0.75)'; g.lineWidth = 1; g.stroke();
   }
 
   // ---------- mic check / calibration ----------
@@ -565,7 +666,20 @@
     if (state.noiseGain) state.noiseGain.gain.value = volToGain(state.settings.noiseVol);
     save();
   });
-  $('bandCount').addEventListener('input', (e) => applyCount(+e.target.value));
+  function commitCount() {
+    const raw = $('bandCount').value.trim();
+    const n = Number(raw);
+    if (!raw || !Number.isInteger(n) || n < D.MIN_BANDS || n > D.MAX_BANDS) {
+      $('countMsg').textContent = 'Enter a whole number from 3 to 24.';
+      $('bandCount').value = state.freqs.length;
+      return;
+    }
+    $('countMsg').textContent = '';
+    if (n !== state.freqs.length) applyCount(n);
+  }
+  $('btnApplyCount').addEventListener('click', commitCount);
+  $('bandCount').addEventListener('change', commitCount);
+  $('bandCount').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); commitCount(); $('bandCount').blur(); } });
   $('btnApplyFreqs').addEventListener('click', () => {
     const f = D.parseFreqs($('freqText').value);
     if (!f) { setStatus('Enter 3 to 24 frequencies between 20 and 20000 Hz, e.g. 100, 1k, 8k.', true); return; }
@@ -577,7 +691,7 @@
   $('range').addEventListener('change', (e) => { state.settings.range = +e.target.value; save(); render(); });
   $('step').addEventListener('change', (e) => { state.settings.step = +e.target.value; save(); render(); });
   $('preferCuts').addEventListener('change', (e) => { state.settings.preferCuts = e.target.checked; save(); render(); });
-  window.addEventListener('resize', () => { drawChart(); drawMeter(state.listening); drawSweepChart(); });
+  window.addEventListener('resize', () => { drawSpectrum(); drawChart(); drawMeter(state.listening); drawSweepChart(); });
   $('btnSweep').addEventListener('click', () => { runSweep().catch(() => { setCalMsg('Sweep failed. Try again.'); endSweep(); }); });
   $('useSweep').addEventListener('change', (e) => { state.useSweep = e.target.checked; render(); });
 
@@ -585,4 +699,5 @@
   syncControls();
   render();
   updateMeter();
+  drawSpectrum();
 })();

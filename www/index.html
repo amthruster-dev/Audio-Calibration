@@ -29,6 +29,13 @@
   </section>
 
   <section class="card">
+    <h2>Spectrum analyzer</h2>
+    <canvas id="specCanvas"></canvas>
+    <div class="legend"><span class="dot bars"></span>Live <span class="dot peakdot"></span>Peak hold <span class="dot bandmark"></span>Your bands</div>
+    <div class="small" id="specNote">Start listening to see the spectrum.</div>
+  </section>
+
+  <section class="card">
     <h2>Mic check</h2>
     <canvas id="meterCanvas"></canvas>
     <div id="meterVerdict" class="verdict">Start listening to check the mic level.</div>
@@ -48,9 +55,13 @@
 
   <section class="card">
     <h2>Bands</h2>
-    <label>Number of bands: <b id="countLabel">10</b>
-      <input id="bandCount" type="range" min="3" max="24" value="10">
+    <label>Number of bands (3 to 24)
+      <div class="row">
+        <input id="bandCount" type="number" inputmode="numeric" min="3" max="24" step="1" class="grow" autocomplete="off">
+        <button id="btnApplyCount">Set</button>
+      </div>
     </label>
+    <div id="countMsg" class="small warnText"></div>
     <label>Frequencies in Hz (comma separated)
       <div class="row">
         <input id="freqText" type="text" inputmode="decimal" class="grow" autocomplete="off">
