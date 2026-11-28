@@ -14,13 +14,14 @@
     peakDb: -120, rmsDb: -120, rmsPow: null, peakHold: -120, rmsHist: [],
     sweep: null, useSweep: true, sweepBusy: false,
     spec: null, specPeak: null, specTop: null,
-    settings: { target: 'audiophile', tau: 8, range: 12, step: 1, preferCuts: false, noiseVol: 30 }
+    baseline: null,
+    settings: { target: 'audiophile', tau: 8, range: 9, step: 1, preferCuts: false, noiseVol: 30, v: 2 }
   };
 
   // ---------- persistence ----------
   function save() {
     try {
-      localStorage.setItem('eqscope', JSON.stringify({ freqs: state.freqs, settings: state.settings }));
+      localStorage.setItem('eqscope', JSON.stringify({ freqs: state.freqs, settings: state.settings, baseline: state.baseline }));
     } catch (e) { /* ignore */ }
   }
   function load() {
@@ -29,6 +30,8 @@
       if (!j) return;
       if (Array.isArray(j.freqs) && j.freqs.length >= 3 && j.freqs.length <= 24) state.freqs = j.freqs;
       if (j.settings) Object.assign(state.settings, j.settings);
+      if (!j.settings || !j.settings.v) { state.settings.range = 9; state.settings.v = 2; }
+      if (j.baseline && JSON.stringify(j.baseline.freqs) === JSON.stringify(state.freqs)) state.baseline = j.baseline;
     } catch (e) { /* ignore */ }
   }
 
@@ -437,7 +440,7 @@
     let acc = 0, cnt = 0;
     fine.forEach((f, i) => { if (f >= 500 && f <= 2000) { acc += lv[i]; cnt++; } });
     const ref0 = cnt ? acc / cnt : 0;
-    state.sweep = { resp: resp, noiseDb: noiseDb, rmsDb: rmsDb, peakDb: peakDb, curve: lv.map(v => v - ref0) };
+    state.sweep = { t: Date.now(), resp: resp, noiseDb: noiseDb, rmsDb: rmsDb, peakDb: peakDb, curve: lv.map(v => v - ref0) };
     state.useSweep = true;
     $('useSweep').checked = true;
     $('useSweepRow').style.display = '';
@@ -507,15 +510,45 @@
     return null;
   }
 
-  function currentEq() {
-    const cur = currentLevels();
-    if (!cur) return null;
-    return D.computeEq(state.freqs, cur.levels, {
+  function eqOpts() {
+    return {
       target: state.settings.target,
       range: state.settings.range,
       step: state.settings.step,
       preferCuts: state.settings.preferCuts
-    });
+    };
+  }
+
+  function baselineOk() {
+    return !!(state.baseline && JSON.stringify(state.baseline.freqs) === JSON.stringify(state.freqs));
+  }
+
+  // Fixed plan when a baseline is locked, otherwise changes from the current state.
+  function currentEq() {
+    if (baselineOk()) return D.computeEq(state.freqs, state.baseline.levels, eqOpts());
+    const cur = currentLevels();
+    if (!cur) return null;
+    return D.computeEq(state.freqs, cur.levels, eqOpts());
+  }
+
+  // Levels measured after the baseline was locked, with the same method as the baseline.
+  function nowLevels() {
+    if (!baselineOk()) return null;
+    if (state.baseline.src === 'sweep') {
+      if (!state.sweep || state.sweep.t <= state.baseline.t) return null;
+      const edges = D.bandEdges(state.freqs, state.sweep.resp.sr / 2);
+      return D.responseBandLevels(state.sweep.resp, edges);
+    }
+    if (state.avgPower && state.avgPower.length === state.freqs.length) return state.avgPower.map(D.toDb);
+    return null;
+  }
+
+  // How far the radio still is from the target, per band (dB, + = needs more).
+  function nowOff() {
+    const lv = nowLevels();
+    if (!lv) return null;
+    const e = D.computeEq(state.freqs, lv, eqOpts());
+    return e.target.map((t, i) => t - e.measured[i]);
   }
 
   function fmtHz(f) { return f >= 1000 ? (f / 1000).toFixed(f % 1000 === 0 ? 0 : 2).replace(/\.?0+$/, '') + 'k' : String(Math.round(f)); }
@@ -527,7 +560,9 @@
     const ul = $('recs');
     ul.innerHTML = '';
     const cur = currentLevels();
-    $('basedOn').textContent = cur ? 'Based on: ' + (cur.src === 'sweep' ? 'sweep measurement' : 'live pink noise / music') : '';
+    $('basedOn').textContent = baselineOk()
+      ? 'Locked baseline (' + (state.baseline.src === 'sweep' ? 'sweep' : 'live pink noise / music') + '): these are the settings to put on your radio, starting from all sliders at 0.'
+      : (cur ? 'Based on: ' + (cur.src === 'sweep' ? 'sweep' : 'live pink noise / music') + '. These are changes from where your radio is now. To avoid chasing, set the radio to 0 and tap Lock baseline below.' : '');
     if (!eq) { $('summary').textContent = 'Run the sweep or start listening to get recommendations.'; return; }
 
     const avg = (pred) => {
@@ -553,17 +588,27 @@
       .sort((a, b) => Math.abs(b.g) - Math.abs(a.g));
     if (!items.length) {
       const li = document.createElement('li');
-      li.textContent = 'No changes needed.';
+      li.textContent = baselineOk() ? 'Leave every band at 0.' : 'No changes needed.';
       ul.appendChild(li);
       return;
     }
+    const locked = baselineOk();
     items.forEach(x => {
       const li = document.createElement('li');
       const amt = Math.abs(x.g).toFixed(state.settings.step < 1 ? 1 : 0);
-      li.innerHTML = (x.g > 0 ? '<span class="up">Raise</span> ' : '<span class="down">Lower</span> ') +
-        fmtHz(x.f) + ' Hz by ' + amt + ' dB';
+      if (locked) {
+        li.innerHTML = 'Set ' + fmtHz(x.f) + ' Hz to <span class="' + (x.g > 0 ? 'up' : 'down') + '">' + fmtGain(x.g) + ' dB</span>';
+      } else {
+        li.innerHTML = (x.g > 0 ? '<span class="up">Raise</span> ' : '<span class="down">Lower</span> ') +
+          fmtHz(x.f) + ' Hz by ' + amt + ' dB';
+      }
       ul.appendChild(li);
     });
+    if (locked) {
+      const li = document.createElement('li');
+      li.textContent = 'All other bands: 0';
+      ul.appendChild(li);
+    }
   }
 
   function render() {
@@ -576,6 +621,9 @@
     const eq = currentEq();
     const tb = document.querySelector('#table tbody');
     tb.innerHTML = '';
+    const off = nowOff();
+    const worst = off ? off.reduce((m, v) => Math.max(m, Math.abs(v)), 0) : null;
+    const wi = off ? off.findIndex(v => Math.abs(v) === worst) : -1;
     state.freqs.forEach((f, i) => {
       const tr = document.createElement('tr');
       const gain = eq ? eq.gain[i] : null;
@@ -583,9 +631,19 @@
       tr.innerHTML = '<td>' + fmtHz(f) + '</td>' +
         '<td>' + (eq ? fmtDb(eq.measured[i]) : '–') + '</td>' +
         '<td>' + (eq ? fmtDb(eq.target[i]) : '–') + '</td>' +
-        '<td class="eq ' + cls + '">' + (eq ? fmtGain(gain) + ' dB' : '–') + '</td>';
+        '<td class="eq ' + cls + '">' + (eq ? fmtGain(gain) + ' dB' : '–') + '</td>' +
+        '<td class="off ' + (off ? (Math.abs(off[i]) <= 1.5 ? 'ok' : 'bad') : '') + '">' + (off ? fmtDb(off[i]) : '–') + '</td>';
       tb.appendChild(tr);
     });
+    const cl = $('checkLine');
+    if (baselineOk() && !off) {
+      cl.className = 'small checkline'; cl.textContent = 'Set your radio to the Set EQ numbers, then ' + (state.baseline.src === 'sweep' ? 'run the sweep again' : 'wait about 10 seconds') + ' to see how close it is.';
+    } else if (off) {
+      const ok = worst <= 1.5;
+      cl.className = 'checkline ' + (ok ? 'ok' : 'bad');
+      cl.textContent = ok ? 'Matched: every band is within 1.5 dB of the target. You are done.'
+        : 'Largest gap: ' + fmtHz(state.freqs[wi]) + ' Hz is ' + Math.abs(off[wi]).toFixed(1) + ' dB ' + (off[wi] > 0 ? 'low' : 'high') + '. Check that the radio is set to the Set EQ numbers.';
+    } else { cl.className = 'small checkline'; cl.textContent = ''; }
     $('preamp').textContent = eq && state.settings.preferCuts
       ? 'Preamp / master volume: ' + fmtDb(eq.preamp) + ' dB (if your EQ has one)'
       : '';
@@ -637,18 +695,38 @@
       const y = yOf(gain);
       g.fillRect(x, Math.min(y, zero), bw, Math.max(1, Math.abs(y - zero)));
     }
+    const offNow = nowOff();
     g.strokeStyle = css('--measured'); g.lineWidth = 2; g.beginPath();
     for (let i = 0; i < n; i++) {
       const x = padL + slot * (i + 0.5);
-      const y = yOf(eq.measured[i] - eq.target[i]);
+      const y = yOf(offNow ? -offNow[i] : eq.measured[i] - eq.target[i]);
       if (i === 0) g.moveTo(x, y); else g.lineTo(x, y);
     }
     g.stroke();
   }
 
+  // ---------- baseline lock ----------
+  function clearBaseline() {
+    if (state.baseline) $('lockMsg').textContent = 'Baseline cleared because the bands changed. Set the radio to 0 and lock again.';
+    state.baseline = null;
+  }
+
+  $('btnLock').addEventListener('click', () => {
+    const cur = currentLevels();
+    if (!cur) { $('lockMsg').textContent = 'Run the sweep or start listening first, with every radio slider at 0.'; return; }
+    state.baseline = { freqs: state.freqs.slice(), levels: cur.levels.slice(), src: cur.src, t: Date.now() };
+    if (cur.src === 'live') resetAverage();
+    $('lockMsg').textContent = 'Baseline locked (' + (cur.src === 'sweep' ? 'sweep' : 'live') + '). The Set EQ numbers will no longer change while you adjust the radio.';
+    save(); render();
+  });
+  $('btnUnlock').addEventListener('click', () => {
+    state.baseline = null; $('lockMsg').textContent = 'Baseline cleared.'; save(); render();
+  });
+
   // ---------- events ----------
   function applyCount(n) {
     state.freqs = D.defaultFreqs(n);
+    clearBaseline();
     resetAverage(); syncControls(); save(); render();
   }
 
@@ -683,7 +761,7 @@
   $('btnApplyFreqs').addEventListener('click', () => {
     const f = D.parseFreqs($('freqText').value);
     if (!f) { setStatus('Enter 3 to 24 frequencies between 20 and 20000 Hz, e.g. 100, 1k, 8k.', true); return; }
-    state.freqs = f; resetAverage(); syncControls(); save(); render();
+    state.freqs = f; clearBaseline(); resetAverage(); syncControls(); save(); render();
     setStatus(state.listening ? 'Listening…' : 'Frequencies applied.');
   });
   $('target').addEventListener('change', (e) => { state.settings.target = e.target.value; save(); render(); });

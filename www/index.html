@@ -92,8 +92,8 @@
       <label class="grow">EQ range
         <select id="range">
           <option value="6">±6 dB</option>
-          <option value="9">±9 dB</option>
-          <option value="12" selected>±12 dB</option>
+          <option value="9" selected>±9 dB</option>
+          <option value="12">±12 dB</option>
           <option value="15">±15 dB</option>
         </select>
       </label>
@@ -118,11 +118,18 @@
 
   <section class="card">
     <h2>Set your EQ to</h2>
+    <p class="small" id="lockHelp">To stop chasing dB: set every slider on your stereo to 0, then tap <b>Lock baseline</b>. The numbers below are then fixed settings (not changes from where the radio is now). Set the radio to them, run the sweep again, and read <b>Off by</b>.</p>
+    <div class="row">
+      <button id="btnLock" class="primary">Lock baseline (radio at 0)</button>
+      <button id="btnUnlock">Clear</button>
+    </div>
+    <div class="small" id="lockMsg"></div>
     <canvas id="chart"></canvas>
     <div class="legend"><span class="dot bars"></span>EQ to apply <span class="dot line"></span>Measured vs. target</div>
     <div class="small" id="preamp"></div>
+    <div id="checkLine" class="small checkline"></div>
     <table id="table">
-      <thead><tr><th>Hz</th><th>Measured</th><th>Target</th><th>Set EQ</th></tr></thead>
+      <thead><tr><th>Hz</th><th>Measured</th><th>Target</th><th>Set EQ</th><th>Off by</th></tr></thead>
       <tbody></tbody>
     </table>
   </section>

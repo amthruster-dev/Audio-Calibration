@@ -78,3 +78,9 @@ td.cut { color: var(--cut); }
 .dot.bandmark { background: transparent; border: 1px dashed var(--muted); }
 .warnText { color: var(--cut); }
 #countMsg:empty { display: none; }
+td.off.ok { color: var(--accent); }
+td.off.bad { color: var(--cut); font-weight: 600; }
+#lockMsg:empty { display: none; }
+.checkline { font-weight: 600; margin: 8px 0 0; }
+.checkline.ok { color: var(--accent); }
+.checkline.bad { color: var(--cut); }
